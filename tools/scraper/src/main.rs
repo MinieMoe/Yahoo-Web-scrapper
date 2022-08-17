@@ -1,10 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::hash::Hash;
-use reqwest::{Request, Client};
+use std::io::Read;
+use std::str::Lines;
+//use std::str::Bytes;
+use reqwest::blocking::Response;
+use reqwest::{Request, Client, header::{HeaderMap, HeaderValue}};
 use scraper::Html;
 use select::document::{Document, self};
 use select::predicate::{Attr, Name};
 use url::Url;
+use bytes::{Bytes, BytesMut, Buf, BufMut};
 
 /*The scraper program will be given one argument, like coil
 , which is the name of the website to scrape.
@@ -51,22 +56,33 @@ Might want to use a HashMap
 Store the hash map as the output, so we can read the hashmap back in again
 A follow on for the fall quarter is write a server that reads the hashmap and serves yahoo.
  */
- struct Website {
-    size: f32,
-    links: HashSet<String>,
-    images: HashSet<String>,
+ struct Page {
+    size: usize,
+    links: Vec<String>,  //list of all website urls found
+    images: Vec<String>, //list of all images urls found
  }
 
  struct Image{
-    size: f32,
+    size: u64,
  }
 
- impl Website {
-    fn new(size: f32, links: ) -> Self{
-
+ impl Page {
+    fn new(size: usize, links: Vec<String>, images:Vec<String> ) -> Self{
+        Self { size, links, images}
     }
-     
+
+    //get method for list of urls found on a page
+    fn get_urls(&mut self) -> & Vec<String>{
+        &self.links
+    }
  }
+
+ impl Image {
+    fn new(size: u64) -> Image{
+        Self {size}
+    }
+ }
+
  /* some URLs extracted from yahoo doesn't have https:// in front, so reqwest won't work on them 
     so we have to fix url before calling requwest on them
     add https:// header to some urls that dont have it so reqwest can work on them
@@ -99,11 +115,33 @@ fn filter_url(link: &str) -> Option<String>{
     }
 }
 
-//send http request to the url and receive response
-fn http_requester(link: &str) -> Option<String>{
+//send http request to the url and receive response. Return html in string and the size of the page in bytes
+/*
+fn http_requester(link: &str) -> Option<Result<bytes::Bytes, reqwest::Error>>{
+
     let client = reqwest::blocking::Client::new();
     let response = client.get(link)
     .header("User-Agent", "Mozilla/5.0");
+    //.send().map(|res| println!("{:?}", res));
+
+    //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
+    match response.send() {
+        Ok(rep) =>{
+            //Some((get_size(&rep), rep.text().unwrap()))
+            Some(rep.bytes())
+        },
+        Err(_e) =>{
+            None
+        }
+    }
+}
+*/
+fn http_requester(link: &str) -> Option<String>{
+
+    let client = reqwest::blocking::Client::new();
+    let response = client.get(link)
+    .header("User-Agent", "Mozilla/5.0");
+    //.send().map(|res| println!("{:?}", res));
 
     //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
     match response.send() {
@@ -116,22 +154,37 @@ fn http_requester(link: &str) -> Option<String>{
     }
 }
 
-//extract urls from the given url
-fn extract_urls(link: &str) -> HashSet<String>{
-    //form a html document
-    let document = Document::from(link);
 
-    //ToDo: downoad html document
+//extract urls from the given html
+//change to Option<Vec<String>>? in case there's no link at all in a page???
+fn extract_urls(html: &str) -> Vec<String>{
+    //form a html document
+    let document = Document::from(html);
+
+    //TODO: downoad html document
 
     //extracting all links in the yahoo page and filter out bad urls
     //NOTE: use HashSet to avoid duplicate value, aka visted pages
     let found_urls= document.find(Name("a"))
     .filter_map(|node| node.attr("href"))
     .filter_map(|link| filter_url(link))
-    //.map(|s| s.to_string())
-    .collect::<HashSet<String>>();
+    .collect();
 
     return found_urls;
+}
+
+//extracting all images from a page
+fn extract_images(html: &str) -> Vec<String>{
+    let document = Document::from(html);
+    
+    //TODO: download images
+
+    let found_images = document.find(Name("img"))
+    .filter_map(|node| node.attr("src"))
+    .map(|i| i.to_string())
+    .collect();
+
+    return found_images;
 }
 
 /* 
@@ -146,21 +199,46 @@ fn extract_urls(link: &str) -> HashSet<String>{
         stop recursion when there's no more link to go to
     
 */
-fn recursive_scraper(link: &str, visited: &mut HashSet<String>){
-    if !visited.contains(link){
-        visited.insert(link.to_string());
-        println!("{}", link);//printing links in hashset, should NOT have dups
-
-        let res_text = http_requester(link);
+fn recursive_scraper(link: &str, visited: &mut HashMap<String, Page>){
+    if !visited.contains_key(link){
         
-        if res_text.is_none(){//ignore invalid url 404
+        let res = http_requester(link);
+        
+        if res.is_none(){//ignore invalid url 404
             return;
         }
-        let found_urls = extract_urls(&res_text.unwrap());
 
-        for url in found_urls.into_iter(){
-            recursive_scraper(&url, visited);
+        let res_text = res.unwrap();
+
+        let found_urls = extract_urls(&res_text);
+        let found_imgs = extract_images(&res_text);
+        let size = res_text.len();
+
+        let new_page = Page::new(size, found_urls, found_imgs);
+        
+        /*Accessing links of Page directly. Error: new_page was moved into list before inserting it into visited
+        let list = &new_page.links;
+
+        visited.insert(link.to_string(), new_page);
+
+        println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
+
+        for url in list {
+            recursive_scraper(&url,visited);
         }
+
+        */
+        /*Accessing links of Page by accessing visited. Error: double mutable borrow
+        visited.insert(link.to_string(), new_page);
+
+        let list = &(visited.get_mut(link).unwrap().links);
+
+        println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
+
+        for url in list {
+            recursive_scraper(&url,visited);
+        }
+        */
     }
 
     return;
@@ -170,7 +248,7 @@ fn recursive_scraper(link: &str, visited: &mut HashSet<String>){
 fn main() {
     
     //list of visited website
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: HashMap<String, Page> = HashMap::new();
 
     //fetching the url from the user: need to start with http:/ or https:/
     let url = std::env::args().last().unwrap();

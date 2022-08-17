@@ -2,15 +2,13 @@ use std::collections::{HashSet, HashMap};
 use std::hash::Hash;
 use std::io::Read;
 use std::str::Lines;
-//use std::str::Bytes;
+use std::rc::Rc;
 use reqwest::blocking::Response;
 use reqwest::{Request, Client, header::{HeaderMap, HeaderValue}};
 use scraper::Html;
 use select::document::{Document, self};
 use select::predicate::{Attr, Name};
 use url::Url;
-use bytes::{Bytes, BytesMut, Buf, BufMut};
-
 /*The scraper program will be given one argument, like coil
 , which is the name of the website to scrape.
 Website scraping is a recursive process.
@@ -116,32 +114,11 @@ fn filter_url(link: &str) -> Option<String>{
 }
 
 //send http request to the url and receive response. Return html in string and the size of the page in bytes
-/*
-fn http_requester(link: &str) -> Option<Result<bytes::Bytes, reqwest::Error>>{
-
-    let client = reqwest::blocking::Client::new();
-    let response = client.get(link)
-    .header("User-Agent", "Mozilla/5.0");
-    //.send().map(|res| println!("{:?}", res));
-
-    //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
-    match response.send() {
-        Ok(rep) =>{
-            //Some((get_size(&rep), rep.text().unwrap()))
-            Some(rep.bytes())
-        },
-        Err(_e) =>{
-            None
-        }
-    }
-}
-*/
 fn http_requester(link: &str) -> Option<String>{
 
     let client = reqwest::blocking::Client::new();
     let response = client.get(link)
     .header("User-Agent", "Mozilla/5.0");
-    //.send().map(|res| println!("{:?}", res));
 
     //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
     match response.send() {
@@ -168,13 +145,19 @@ fn extract_urls(html: &str) -> Vec<String>{
     let found_urls= document.find(Name("a"))
     .filter_map(|node| node.attr("href"))
     .filter_map(|link| filter_url(link))
-    .collect();
+    .collect();    
 
     return found_urls;
 }
 
 //extracting all images from a page
-fn extract_images(html: &str) -> Vec<String>{
+/*
+    find an image on a page
+    check if it's downloaded aka is it in 'downloaded' vector?
+        if it's not, make a new Image() and add to 'downloaded'
+    add to the list of found images in a page (regardless of whether it was downloaded before or not)
+ */
+fn extract_images(html: &str, downloaded: &mut HashMap<String, Image>) -> Vec<String>{
     let document = Document::from(html);
     
     //TODO: download images
@@ -184,6 +167,12 @@ fn extract_images(html: &str) -> Vec<String>{
     .map(|i| i.to_string())
     .collect();
 
+    //update download list
+    // for img in &found_images{
+    //     if !downloaded.contains_key(img){
+    //         downloaded.insert(img, )
+    //     }
+    // }
     return found_images;
 }
 
@@ -199,7 +188,7 @@ fn extract_images(html: &str) -> Vec<String>{
         stop recursion when there's no more link to go to
     
 */
-fn recursive_scraper(link: &str, visited: &mut HashMap<String, Page>){
+fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>){
     if !visited.contains_key(link){
         
         let res = http_requester(link);
@@ -209,36 +198,19 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String, Page>){
         }
 
         let res_text = res.unwrap();
-
         let found_urls = extract_urls(&res_text);
-        let found_imgs = extract_images(&res_text);
+        let found_imgs = extract_images(&res_text, downloaded);
         let size = res_text.len();
 
-        let new_page = Page::new(size, found_urls, found_imgs);
+        let new_page = Rc::new(Page::new(size, found_urls, found_imgs));
+        visited.insert(link.to_string(), new_page.clone());
+
+        //println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
+
+        for url in &new_page.links {
+            recursive_scraper(&url,visited, downloaded);
+        }
         
-        /*Accessing links of Page directly. Error: new_page was moved into list before inserting it into visited
-        let list = &new_page.links;
-
-        visited.insert(link.to_string(), new_page);
-
-        println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
-
-        for url in list {
-            recursive_scraper(&url,visited);
-        }
-
-        */
-        /*Accessing links of Page by accessing visited. Error: double mutable borrow
-        visited.insert(link.to_string(), new_page);
-
-        let list = &(visited.get_mut(link).unwrap().links);
-
-        println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
-
-        for url in list {
-            recursive_scraper(&url,visited);
-        }
-        */
     }
 
     return;
@@ -248,7 +220,9 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String, Page>){
 fn main() {
     
     //list of visited website
-    let mut visited: HashMap<String, Page> = HashMap::new();
+    let mut visited: HashMap<String, Rc<Page>> = HashMap::new();
+    //list of downloaded images
+    let mut downloaded: HashMap<String, Image> = HashMap::new();
 
     //fetching the url from the user: need to start with http:/ or https:/
     let url = std::env::args().last().unwrap();
@@ -272,6 +246,6 @@ fn main() {
         print!("{:#?}", found_urls);
     */
     
-    recursive_scraper(&url, &mut visited);
+    recursive_scraper(&url, &mut visited, &mut downloaded);
 
 }

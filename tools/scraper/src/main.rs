@@ -1,14 +1,18 @@
 use std::collections::{HashSet, HashMap};
+use std::f32::consts::E;
 use std::hash::Hash;
 use std::io::Read;
 use std::str::Lines;
+use std::fs::File;
 use std::rc::Rc;
 use reqwest::blocking::Response;
-use reqwest::{Request, Client, header::{HeaderMap, HeaderValue}};
+use reqwest::{Request, Client};
 use scraper::Html;
 use select::document::{Document, self};
 use select::predicate::{Attr, Name};
 use url::Url;
+use csv::{Writer};
+
 /*The scraper program will be given one argument, like coil
 , which is the name of the website to scrape.
 Website scraping is a recursive process.
@@ -42,18 +46,6 @@ Website scraping is a recursive process.
     visited.extend(new_urls);
  */
 
-/* 
-Get your code in a branch under tools/scraper (you called it scrapper) code reviewed and checked in
-For every page, store
-    The size of the page
-    The links on the page (filter out all links that map to somewhere else)
-    The images on the page
-For every image
-    The size of the image
-Might want to use a HashMap
-Store the hash map as the output, so we can read the hashmap back in again
-A follow on for the fall quarter is write a server that reads the hashmap and serves yahoo.
- */
  struct Page {
     size: usize,
     links: Vec<String>,  //list of all website urls found
@@ -61,7 +53,7 @@ A follow on for the fall quarter is write a server that reads the hashmap and se
  }
 
  struct Image{
-    size: u64,
+    size: usize,
  }
 
  impl Page {
@@ -76,7 +68,7 @@ A follow on for the fall quarter is write a server that reads the hashmap and se
  }
 
  impl Image {
-    fn new(size: u64) -> Image{
+    fn new(size: usize) -> Image{
         Self {size}
     }
  }
@@ -113,6 +105,15 @@ fn filter_url(link: &str) -> Option<String>{
     }
 }
 
+//discard any invalid image url
+fn filter_img_url(link: &str) -> Option<String>{
+    if link.contains("https://s.yimg.com") {
+        Some(link.to_string())
+    }else {
+        None
+    }
+}
+
 //send http request to the url and receive response. Return html in string and the size of the page in bytes
 fn http_requester(link: &str) -> Option<String>{
 
@@ -138,10 +139,8 @@ fn extract_urls(html: &str) -> Vec<String>{
     //form a html document
     let document = Document::from(html);
 
-    //TODO: downoad html document
-
     //extracting all links in the yahoo page and filter out bad urls
-    //NOTE: use HashSet to avoid duplicate value, aka visted pages
+    //NOTE: use HashMap to avoid duplicate value, aka visted pages
     let found_urls= document.find(Name("a"))
     .filter_map(|node| node.attr("href"))
     .filter_map(|link| filter_url(link))
@@ -151,30 +150,43 @@ fn extract_urls(html: &str) -> Vec<String>{
 }
 
 //extracting all images from a page
-/*
-    find an image on a page
-    check if it's downloaded aka is it in 'downloaded' vector?
-        if it's not, make a new Image() and add to 'downloaded'
-    add to the list of found images in a page (regardless of whether it was downloaded before or not)
- */
-fn extract_images(html: &str, downloaded: &mut HashMap<String, Image>) -> Vec<String>{
+fn extract_images(html: &str) -> Vec<String>{
     let document = Document::from(html);
     
-    //TODO: download images
-
     let found_images = document.find(Name("img"))
     .filter_map(|node| node.attr("src"))
-    .map(|i| i.to_string())
+    .filter_map(|link| filter_img_url(link))
     .collect();
 
-    //update download list
-    // for img in &found_images{
-    //     if !downloaded.contains_key(img){
-    //         downloaded.insert(img, )
-    //     }
-    // }
     return found_images;
 }
+
+/*
+    given a list of image urls, check if it's downloaded aka is it in 'downloaded' vector?
+        if it's not:
+            download the image to a folder
+            retrieve size of image once downloaded
+            make a new Image() and add to 'downloaded'
+    add to the list of found images in a page (regardless of whether it was downloaded before or not)
+ */
+fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>){
+    for img in img_urls{
+        if !downloaded.contains_key(img){
+
+            //"download" the image
+            let img_bytes = reqwest::blocking::get(img).unwrap().bytes().unwrap();
+
+            //get size of image just downloaded and update the downloaded list
+            let size = img_bytes.len();
+            downloaded.insert(img.to_string(), Image::new(size));
+
+            //testing
+            println!("Img: {}, Size: {}", img, size);
+
+        }
+    }
+}
+
 
 /* 
     check if the current link has been visited
@@ -188,7 +200,7 @@ fn extract_images(html: &str, downloaded: &mut HashMap<String, Image>) -> Vec<St
         stop recursion when there's no more link to go to
     
 */
-fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>){
+fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, writer: &mut Writer<File>){
     if !visited.contains_key(link){
         
         let res = http_requester(link);
@@ -197,20 +209,26 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
             return;
         }
 
+        //scrap urls and imgs on a page
         let res_text = res.unwrap();
         let found_urls = extract_urls(&res_text);
-        let found_imgs = extract_images(&res_text, downloaded);
+        let found_imgs = extract_images(&res_text);
         let size = res_text.len();
+
+        //printing links in hashmap, should NOT have dups
+        println!("URL:{}; Size:{}", link, size);
+
+        //download all images found
+        println!("*******Images found within this link*******");
+        download_img(&found_imgs, downloaded);
 
         let new_page = Rc::new(Page::new(size, found_urls, found_imgs));
         visited.insert(link.to_string(), new_page.clone());
 
-        //println!("url:{}; size:{}", link, size);//printing links in hashmap, should NOT have dups
 
         for url in &new_page.links {
-            recursive_scraper(&url,visited, downloaded);
+            recursive_scraper(&url,visited, downloaded, writer);
         }
-        
     }
 
     return;
@@ -224,6 +242,11 @@ fn main() {
     //list of downloaded images
     let mut downloaded: HashMap<String, Image> = HashMap::new();
 
+    //file to write result to
+    let path = "result.cvs";
+    let file = File::create(path);
+    let mut writer = Writer::from_path(path).unwrap();
+
     //fetching the url from the user: need to start with http:/ or https:/
     let url = std::env::args().last().unwrap();
     let http_head = &(url.as_str())[..4];
@@ -232,20 +255,7 @@ fn main() {
         print!("Not URL!");
         return;
     }
-
-    /*
-        //sending http/https request to host: yahoo.com
-        let res_text = http_requester(&url);
-
-        //update the list of visited website, yahoo.com will be first
-        visited.insert(url);
-
-        //extracting all links in the MAIN yahoo page and filter out bad urls
-        let found_urls = extract_urls(&res_text);
-
-        print!("{:#?}", found_urls);
-    */
     
-    recursive_scraper(&url, &mut visited, &mut downloaded);
+    recursive_scraper(&url, &mut visited, &mut downloaded, &mut writer);
 
 }

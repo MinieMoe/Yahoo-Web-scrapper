@@ -225,9 +225,9 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
         visited.insert(link.to_string(), new_page.clone());
 
 
-        // for url in &new_page.links {
-        //     recursive_scraper(&url,visited, downloaded);
-        // }
+        for url in &new_page.links {
+            recursive_scraper(&url,visited, downloaded);
+        }
     }
 
     return;

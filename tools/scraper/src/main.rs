@@ -1,7 +1,6 @@
 use std::collections::{HashSet, HashMap};
 use std::f32::consts::E;
 use std::hash::Hash;
-use std::io::Read;
 use std::str::Lines;
 use std::fs::File;
 use std::rc::Rc;
@@ -11,7 +10,7 @@ use scraper::Html;
 use select::document::{Document, self};
 use select::predicate::{Attr, Name};
 use url::Url;
-use csv::{Writer};
+use serde::{Serialize, Deserialize};
 
 /*The scraper program will be given one argument, like coil
 , which is the name of the website to scrape.
@@ -45,13 +44,13 @@ Website scraping is a recursive process.
     //add the new urls to the visited list now that we just visit them
     visited.extend(new_urls);
  */
-
+#[derive(Serialize, Deserialize, Debug)]
  struct Page {
     size: usize,
     links: Vec<String>,  //list of all website urls found
     images: Vec<String>, //list of all images urls found
  }
-
+ #[derive(Serialize, Deserialize, Debug)]
  struct Image{
     size: usize,
  }
@@ -200,7 +199,7 @@ fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>)
         stop recursion when there's no more link to go to
     
 */
-fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, writer: &mut Writer<File>){
+fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>){
     if !visited.contains_key(link){
         
         let res = http_requester(link);
@@ -226,9 +225,9 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
         visited.insert(link.to_string(), new_page.clone());
 
 
-        for url in &new_page.links {
-            recursive_scraper(&url,visited, downloaded, writer);
-        }
+        // for url in &new_page.links {
+        //     recursive_scraper(&url,visited, downloaded);
+        // }
     }
 
     return;
@@ -243,9 +242,11 @@ fn main() {
     let mut downloaded: HashMap<String, Image> = HashMap::new();
 
     //file to write result to
-    let path = "result.cvs";
-    let file = File::create(path);
-    let mut writer = Writer::from_path(path).unwrap();
+    let pages_path = "visited.json";
+    let imgs_path = "downloaded.json";
+
+    let pages_file = File::create(pages_path).unwrap();
+    let imgs_file = File::create(imgs_path).unwrap();
 
     //fetching the url from the user: need to start with http:/ or https:/
     let url = std::env::args().last().unwrap();
@@ -256,6 +257,17 @@ fn main() {
         return;
     }
     
-    recursive_scraper(&url, &mut visited, &mut downloaded, &mut writer);
+    recursive_scraper(&url, &mut visited, &mut downloaded,);
+    let pages_cereal =  serde_json::to_string(&visited).unwrap();
+    let imgs_cereal = serde_json::to_string(&downloaded).unwrap();
+
+    serde_json::ser::to_writer(pages_file, &pages_cereal).unwrap();
+    serde_json::ser::to_writer(imgs_file, &imgs_cereal).unwrap();
+
 
 }
+
+/*
+serde to serialize data
+pull request 
+*/

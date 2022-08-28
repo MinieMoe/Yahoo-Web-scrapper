@@ -1,49 +1,12 @@
-use std::collections::{HashSet, HashMap};
-use std::f32::consts::E;
-use std::hash::Hash;
-use std::str::Lines;
+use std::collections::HashMap;
 use std::fs::File;
 use std::rc::Rc;
-use reqwest::blocking::Response;
-use reqwest::{Request, Client};
-use scraper::Html;
-use select::document::{Document, self};
-use select::predicate::{Attr, Name};
+use reqwest;
+use select::document::{Document};
+use select::predicate::{Name};
 use url::Url;
 use serde::{Serialize, Deserialize};
 
-/*The scraper program will be given one argument, like coil
-, which is the name of the website to scrape.
-Website scraping is a recursive process.
-
-1.	Initialize a list of all visited pages to be empty.
-2.	Initialize a list of all downloaded images to be empty.
-3.	Start with the URL of the home page.
-4.	To visit a page
-    a.	If the page has already been visited, return.
-    b.	Otherwise use reqwest to download the HTML page at the given URL
-    c.	For each page:
-        i.	Keep track of the size of the page (this is given by the server in the header under `Content-Length`.
-        ii.	Keep track of all links on the page so long as they point to the same domain, i.e. track only yahoo.com links, and discard everything else.
-        iii.	Keep track of all images on the page
-            1.	If the image has already been downloaded, continue.
-            2.	Otherwise for each image, download the image and keep track of how large it is.
-            3.	Add the image to the list of downloaded images
-        iv.	Add the page to the list of visited pages
-5.	Recursively visit each of the links on the page until there are no more pages
-6.	Write the data you have collected about all the pages and all the images to a file that you can read later. You can use any format you want, e.g. CSV
-
-*/
-
-/* code dumps
-//remove visited pages
-    let new_urls = found_urls.difference(&visited)
-    .map(|s| s.to_string())
-    .collect::<HashSet<String>>();
-
-    //add the new urls to the visited list now that we just visit them
-    visited.extend(new_urls);
- */
 #[derive(Serialize, Deserialize, Debug)]
  struct Page {
     size: usize,
@@ -221,6 +184,7 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
         println!("*******Images found within this link*******");
         download_img(&found_imgs, downloaded);
 
+        //use Rc<Page> so we can share the page between 'visisted' and the recurive loop
         let new_page = Rc::new(Page::new(size, found_urls, found_imgs));
         visited.insert(link.to_string(), new_page.clone());
 
@@ -241,7 +205,7 @@ fn main() {
     //list of downloaded images
     let mut downloaded: HashMap<String, Image> = HashMap::new();
 
-    //file to write result to
+    //file to write results to
     let pages_path = "visited.json";
     let imgs_path = "downloaded.json";
 
@@ -258,11 +222,10 @@ fn main() {
     }
     
     recursive_scraper(&url, &mut visited, &mut downloaded,);
-    let pages_cereal =  serde_json::to_string(&visited).unwrap();
-    let imgs_cereal = serde_json::to_string(&downloaded).unwrap();
 
-    serde_json::ser::to_writer(pages_file, &pages_cereal).unwrap();
-    serde_json::ser::to_writer(imgs_file, &imgs_cereal).unwrap();
+    //serialize result as JSON string to the created paths
+    let pages_cerealizer = serde_json::ser::to_writer_pretty(pages_file, &visited).unwrap();
+    let imgs_cerealizer = serde_json::ser::to_writer_pretty(imgs_file, &downloaded).unwrap();
 
 
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::rc::Rc;
+use std::time::Duration;
 use reqwest;
 use select::document::{Document};
 use select::predicate::{Name};
@@ -86,14 +87,19 @@ fn http_requester(link: &str, mut tries:u32, baddies: &mut Vec<String>) -> Optio
     }
 
     let client = reqwest::blocking::Client::new();
-    let response = client.get(link)
-    .header("User-Agent", "Mozilla/5.0");
+    let request = client.get(link)
+    .header("User-Agent", "Mozilla/5.0")
+    .timeout(Duration::new(3, 0));  //if the request sent is hung for more than 3 seconds, stop and return time out error
+
+    let response = request.send();
+    //println!("request sent!");
 
     //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
-    match response.send() {
+    match response {
         Ok(rep) =>{
             match rep.text(){
                 Ok(txt) =>{
+                    //println!("got text");
                     Some(txt)
                 },
                 Err(_e) =>{ //try the link 3 times then stop if still gives error

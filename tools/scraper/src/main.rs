@@ -77,7 +77,13 @@ fn filter_img_url(link: &str) -> Option<String>{
 }
 
 //send http request to the url and receive response. Return html in string and the size of the page in bytes
-fn http_requester(link: &str) -> Option<String>{
+//if the response give error, tries the link again 3 time, if still fails, add to fail list
+fn http_requester(link: &str, mut tries:u32, baddies: &mut Vec<String>) -> Option<String>{
+
+    if tries == 4{
+        baddies.push(link.to_string());
+        return None;
+    }
 
     let client = reqwest::blocking::Client::new();
     let response = client.get(link)
@@ -86,10 +92,21 @@ fn http_requester(link: &str) -> Option<String>{
     //had to manually handle error in case we get 404 url, which will make the program crash if we just use unwrap()
     match response.send() {
         Ok(rep) =>{
-            Some(rep.text().unwrap())
+            match rep.text(){
+                Ok(txt) =>{
+                    Some(txt)
+                },
+                Err(_e) =>{ //try the link 3 times then stop if still gives error
+                    println!("Fail! {}", _e);
+                    tries +=1;
+                    http_requester(link, tries, baddies)
+                }
+            }
         },
         Err(_e) =>{
-            None
+            println!("Fail! {}", _e);
+            tries +=1;
+            http_requester(link, tries, baddies)
         }
     }
 }
@@ -131,20 +148,37 @@ fn extract_images(html: &str) -> Vec<String>{
             make a new Image() and add to 'downloaded'
     add to the list of found images in a page (regardless of whether it was downloaded before or not)
  */
-fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>){
+fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>, baddies:&mut Vec<String>){
     for img in img_urls{
         if !downloaded.contains_key(img){
 
+            println!("Processing...{}", img);
+
             //"download" the image
-            let img_bytes = reqwest::blocking::get(img).unwrap().bytes().unwrap();
+            //let img_bytes = reqwest::blocking::get(img).unwrap().bytes().unwrap();
 
-            //get size of image just downloaded and update the downloaded list
-            let size = img_bytes.len();
-            downloaded.insert(img.to_string(), Image::new(size));
-
-            //testing
-            println!("Img: {}, Size: {}", img, size);
-
+            //TODO: check for error here instead of unwrap()
+            match reqwest::blocking::get(img) {
+                Ok(rep) => {
+                    match rep.bytes() {
+                        Ok(img_bytes) =>{
+                            //get size of image just downloaded and update the downloaded list
+                            let size = img_bytes.len();
+                            downloaded.insert(img.to_string(), Image::new(size));
+                            //testing
+                            println!("Success! -> size: {}",size);
+                        },
+                        Err(_e) =>{
+                            println!("Fail! {}", _e);
+                            baddies.push(img.to_string());
+                        }
+                    }
+                },
+                Err(_e) =>{
+                    println!("Fail! {}", _e);
+                    baddies.push(img.to_string());
+                }
+            }
         }
     }
 }
@@ -162,10 +196,12 @@ fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>)
         stop recursion when there's no more link to go to
     
 */
-fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>){
+fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, baddies: &mut Vec<String>){
     if !visited.contains_key(link){
         
-        let res = http_requester(link);
+        println!("Processing...{}", link);      //checking which link is being scraped in case it crashes
+
+        let res = http_requester(link, 1, baddies);
         
         if res.is_none(){//ignore invalid url 404
             return;
@@ -178,11 +214,11 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
         let size = res_text.len();
 
         //printing links in hashmap, should NOT have dups
-        println!("URL:{}; Size:{}", link, size);
+        println!("Sucess! -> Size:{}", size);
 
         //download all images found
         println!("*******Images found within this link*******");
-        download_img(&found_imgs, downloaded);
+        download_img(&found_imgs, downloaded, baddies);
 
         //use Rc<Page> so we can share the page between 'visisted' and the recurive loop
         let new_page = Rc::new(Page::new(size, found_urls, found_imgs));
@@ -190,7 +226,7 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
 
 
         for url in &new_page.links {
-            recursive_scraper(&url,visited, downloaded);
+            recursive_scraper(&url,visited, downloaded, baddies);
         }
     }
 
@@ -204,13 +240,13 @@ fn main() {
     let mut visited: HashMap<String, Rc<Page>> = HashMap::new();
     //list of downloaded images
     let mut downloaded: HashMap<String, Image> = HashMap::new();
+    //list of failed URLs
+    let mut baddies: Vec<String> = Vec::new();
 
     //file to write results to
-    let pages_path = "visited.json";
-    let imgs_path = "downloaded.json";
-
-    let pages_file = File::create(pages_path).unwrap();
-    let imgs_file = File::create(imgs_path).unwrap();
+    let pages_file = File::create("visited.json").unwrap();
+    let imgs_file = File::create("downloaded.json").unwrap();
+    let fails_file = File::create("baddies.json").unwrap();
 
     //fetching the url from the user: need to start with http:/ or https:/
     let url = std::env::args().last().unwrap();
@@ -221,11 +257,12 @@ fn main() {
         return;
     }
     
-    recursive_scraper(&url, &mut visited, &mut downloaded,);
+    recursive_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
 
     //serialize result as JSON string to the created paths
     let pages_cerealizer = serde_json::ser::to_writer_pretty(pages_file, &visited).unwrap();
     let imgs_cerealizer = serde_json::ser::to_writer_pretty(imgs_file, &downloaded).unwrap();
+    let fail_cerealizer = serde_json::ser::to_writer_pretty(fails_file, &baddies).unwrap();
 
 
 }

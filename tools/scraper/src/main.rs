@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::rc::Rc;
 use std::time::Duration;
@@ -158,7 +158,7 @@ fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>,
     for img in img_urls{
         if !downloaded.contains_key(img){
 
-            println!("Processing...{}", img);
+            println!("Processing IMG...{}", img);
 
             //"download" the image
             //let img_bytes = reqwest::blocking::get(img).unwrap().bytes().unwrap();
@@ -240,6 +240,57 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
 
 }
 
+/*non-recursive bfs scraper
+    local lists: found_urls -> list of urls found in a page, may or may not have been visited
+    start with yahoo.com, add it to found_urls
+    while found_urls is not empty, iterate through each link in the list starting from the front
+        check if the current url has been visited
+            if not, scrap each url in the list and add them to the found_url. 
+                Download all the image on this page too
+                Then add this url to list of visted website
+            if vististed, then skip this url and move on to the next one on the list
+*/
+fn bfs_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, baddies: &mut Vec<String>){
+    let mut found_urls: VecDeque<String> = VecDeque::new();
+    found_urls.push_back(link.to_string());
+
+    while !found_urls.is_empty(){
+        let url = found_urls.pop_front().unwrap();
+
+        println!("Processing URL...{}", url);      //checking which link is being scraped in case it crashes
+
+        let res = http_requester(&url, 1, baddies);
+        
+        if res.is_none(){//ignore invalid url 404
+            continue;
+        }
+
+        //scrap urls and imgs on a page
+        let res_text = res.unwrap();
+        let scraped_urls = extract_urls(&res_text);
+        let scraped_imgs = extract_images(&res_text);
+        let size = res_text.len();
+
+        //printing links in hashmap, should NOT have dups
+        println!("Sucess! -> Size:{}", size);
+
+        //download all images found
+        println!("*******Images found within this link*******");
+        download_img(&scraped_imgs, downloaded, baddies);
+        
+        let new_page = Rc::new(Page::new(size, scraped_urls, scraped_imgs));
+        visited.insert(url, new_page.clone());
+
+        //add unvisited urls from scraped_urls to found_urls
+        for new in &new_page.links{
+            if !visited.contains_key(new){
+                found_urls.push_back(new.to_string());
+            }
+        }
+    
+    }
+
+}
 fn main() {
     
     //list of visited website
@@ -263,7 +314,8 @@ fn main() {
         return;
     }
     
-    recursive_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
+    //recursive_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
+    bfs_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
 
     //serialize result as JSON string to the created paths
     let pages_cerealizer = serde_json::ser::to_writer_pretty(pages_file, &visited).unwrap();

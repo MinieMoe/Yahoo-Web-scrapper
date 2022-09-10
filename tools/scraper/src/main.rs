@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
+use std::io::Write;
 use std::rc::Rc;
 use std::time::Duration;
 use reqwest;
@@ -7,6 +8,7 @@ use select::document::{Document};
 use select::predicate::{Name};
 use url::Url;
 use serde::{Serialize, Deserialize};
+use clap::{Command, Arg};
 
 #[derive(Serialize, Deserialize, Debug)]
  struct Page {
@@ -190,7 +192,7 @@ fn download_img(img_urls: &Vec<String>, downloaded: &mut HashMap<String, Image>,
 }
 
 
-/* 
+/* DEPRECATED
     check if the current link has been visited
         if visited, return
     if not visted,
@@ -250,7 +252,7 @@ fn recursive_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloa
                 Then add this url to list of visted website
             if vististed, then skip this url and move on to the next one on the list
 */
-fn bfs_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, baddies: &mut Vec<String>){
+fn bfs_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, baddies: &mut Vec<String>, mut log_file:File){
     let mut found_urls: VecDeque<String> = VecDeque::new();
     found_urls.push_back(link.to_string());
 
@@ -277,6 +279,59 @@ fn bfs_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &
         //download all images found
         println!("*******Images found within this link*******");
         download_img(&scraped_imgs, downloaded, baddies);
+
+        //write page info to a log file
+        log_file.write_fmt(format_args!("URL: {} - Size: {}: ", &url, size)).expect("write url failed");
+        log_file.write_fmt(format_args!("URLS List: {:?} ,", &scraped_urls)).expect("write url list failed");
+        log_file.write_fmt(format_args!("IMG List: {:?} \n", &scraped_imgs)).expect("write images failed");
+        
+        let new_page = Rc::new(Page::new(size, scraped_urls, scraped_imgs));
+        visited.insert(url, new_page.clone());
+
+        //add unvisited urls from scraped_urls to found_urls
+        for new in &new_page.links{
+
+            if !visited.contains_key(new){
+                found_urls.push_back(new.to_string());
+            }
+        }
+    
+    }
+
+}
+
+fn bfs_scraper_with_limit(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &mut HashMap<String, Image>, baddies: &mut Vec<String>, mut limit:i32, mut log_file:File){
+    let mut found_urls: VecDeque<String> = VecDeque::new();
+    found_urls.push_back(link.to_string());
+
+    while !found_urls.is_empty() && limit > 0{
+        let url = found_urls.pop_front().unwrap();
+
+        println!("Processing URL...{}", url);      //checking which link is being scraped in case it crashes
+
+        let res = http_requester(&url, 1, baddies);
+        
+        if res.is_none(){//ignore invalid url 404
+            continue;
+        }
+
+        //scrap urls and imgs on a page
+        let res_text = res.unwrap();
+        let scraped_urls = extract_urls(&res_text);
+        let scraped_imgs = extract_images(&res_text);
+        let size = res_text.len();
+
+        //printing links in hashmap, should NOT have dups
+        println!("Sucess! -> Size:{}", size);
+
+        //download all images found
+        println!("*******Images found within this link*******");
+        download_img(&scraped_imgs, downloaded, baddies);
+
+        //write page info to a log file
+        log_file.write_fmt(format_args!("URL: {} - Size: {}: ", &url, size)).expect("write url failed");
+        log_file.write_fmt(format_args!("URLS List: {:?} ,", &scraped_urls)).expect("write url list failed");
+        log_file.write_fmt(format_args!("IMG List: {:?} \n", &scraped_imgs)).expect("write images failed");
         
         let new_page = Rc::new(Page::new(size, scraped_urls, scraped_imgs));
         visited.insert(url, new_page.clone());
@@ -287,12 +342,67 @@ fn bfs_scraper(link: &str, visited: &mut HashMap<String,Rc<Page>>, downloaded: &
                 found_urls.push_back(new.to_string());
             }
         }
+
+        limit -=1;
     
     }
 
 }
 fn main() {
+
+    //parsing arguments using CLAP
+    let arg_matcher = Command::new("Web Crawl Test")
+        .about("Web crawler")
+        .author("Min Nguyen")
+        //.allow_missing_positional(true)
+        .arg(Arg::with_name("max")
+            .short('m')
+            .long("max")
+            .takes_value(true)
+            .help("Max number of web page to crawl"))
+        .arg(Arg::with_name("url")
+            //.required(true)
+            .short('u')
+            .long("url")
+            .takes_value(true)
+            .help("The url of the root website to crawl from"))
+        .get_matches();
     
+    //fetching the url from the user: need to start with http:/ or https:/
+    let url = arg_matcher.value_of("url").unwrap();
+    let http_head = &(url)[..4];
+    
+    if http_head.ne("http"){
+        print!("Not URL!");
+        return;
+    }
+    
+    //see how many page to be crawled
+    let max = arg_matcher.value_of("max");
+    let mut limit = match max {
+        None => {
+            println!("No limit!");
+            0
+        },
+        Some(s) => {
+            match s.parse::<i32>(){
+                Ok(n) => {
+                    if n <= 0 {
+                        println!("No negative nor zero");
+                        return;
+                    }
+                    println!("Crawling {} pages...", n);
+                    n
+                },
+                Err(_) =>{
+                    println!("Not an integer");
+                    return;
+                }
+            }
+        }
+    };
+
+
     //list of visited website
     let mut visited: HashMap<String, Rc<Page>> = HashMap::new();
     //list of downloaded images
@@ -301,21 +411,18 @@ fn main() {
     let mut baddies: Vec<String> = Vec::new();
 
     //file to write results to
+    let mut log_file = File::create("log.txt").unwrap();
     let pages_file = File::create("visited.json").unwrap();
     let imgs_file = File::create("downloaded.json").unwrap();
     let fails_file = File::create("baddies.json").unwrap();
-
-    //fetching the url from the user: need to start with http:/ or https:/
-    let url = std::env::args().last().unwrap();
-    let http_head = &(url.as_str())[..4];
-    
-    if http_head.ne("http"){
-        print!("Not URL!");
-        return;
-    }
     
     //recursive_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
-    bfs_scraper(&url, &mut visited, &mut downloaded, &mut baddies);
+    if limit == 0{
+        bfs_scraper(&url, &mut visited, &mut downloaded, &mut baddies, log_file);
+    }else{
+        bfs_scraper_with_limit(&url, &mut visited, &mut downloaded, &mut baddies, limit, log_file);
+    }
+    
 
     //serialize result as JSON string to the created paths
     let pages_cerealizer = serde_json::ser::to_writer_pretty(pages_file, &visited).unwrap();

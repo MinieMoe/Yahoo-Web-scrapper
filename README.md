@@ -1,5 +1,9 @@
 # Systems Research Group - *Extensible Little Virtual Internet Simulation (Elvis)*
 
+## Web Scrapper
+As a part of the research group, I worked on the web-scrapper for the Yahoo server simulator. I scrapped all web links and images found on yahoo.com and store them inside a json file.
+I have to run the web-scrapper by ssh into the school lab due to a large amount of data scrapped, about over more than 100,000 URLS and images
+
 ## Planning document
 
 [https://docs.google.com/document/d/1HnhrICXHJyRhc0CUmUgXLJbSlxZfF9wzzvsMujmxk2A/edit](https://docs.google.com/document/d/1HnhrICXHJyRhc0CUmUgXLJbSlxZfF9wzzvsMujmxk2A/edit)
